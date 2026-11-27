@@ -473,4 +473,114 @@ describe("Sequence", () => {
 			expect(invoked).to.be.true;
 		});
 	});
+
+	context("Mid-playback modifications", () => {
+		it("replaced events take effect from the next loop, old values do not replay", async () => {
+			const calls: Array<{ time: number; value: number }> = [];
+			await Offline(({ transport }) => {
+				const seq = new Sequence({
+					events: [0, 1, 2, 3],
+					subdivision: "4n",
+					callback(_time, value): void {
+						if (value !== null) {
+							calls.push({
+								time: transport.now(),
+								value,
+							});
+						}
+					},
+				}).start(0);
+				transport.start(0);
+				// At 1.5 seconds (middle of second loop), replace beats 0 and 1
+				return atTime(1.5, () => {
+					seq.events[0] = 10;
+					seq.events[1] = 11;
+				});
+			}, 5);
+			// After replacement at 1.5s:
+			// - Values 0,1 should only appear in the first loop and first part of second loop
+			// - Values 10,11 should appear starting from the next loop (after 2s)
+			const firstLoopEnd = calls.findIndex(
+				(c) => c.time > 1.5 && c.value === 2
+			);
+			expect(firstLoopEnd).to.be.gt(-1);
+			// After the transition, old values 0,1 should not appear
+			const afterTransition = calls.filter((c) => c.time > 2.5);
+			const oldValuesAfter = afterTransition.filter(
+				(c) => c.value === 0 || c.value === 1
+			);
+			expect(oldValuesAfter.length).to.equal(0);
+			// New values 10,11 should appear after the transition
+			const newValuesAfter = afterTransition.filter(
+				(c) => c.value === 10 || c.value === 11
+			);
+			expect(newValuesAfter.length).to.be.gt(0);
+		});
+
+		it("deleted events do not fire on subsequent loops", async () => {
+			const calls: Array<{ time: number; value: number }> = [];
+			await Offline(({ transport }) => {
+				const seq = new Sequence({
+					events: [0, 1, 2, 3],
+					subdivision: "4n",
+					callback(_time, value): void {
+						if (value !== null) {
+							calls.push({
+								time: transport.now(),
+								value,
+							});
+						}
+					},
+				}).start(0);
+				transport.start(0);
+				// At 1.5 seconds, delete beat 0
+				return atTime(1.5, () => {
+					seq.events[0] = null;
+				});
+			}, 5);
+			// After deletion, value 0 should not appear in later loops
+			const afterDeletion = calls.filter((c) => c.time > 2.5);
+			const zerosAfter = afterDeletion.filter((c) => c.value === 0);
+			expect(zerosAfter.length).to.equal(0);
+			// Other values should still fire
+			expect(afterDeletion.filter((c) => c.value === 2).length).to.be.gt(
+				0
+			);
+		});
+
+		it("consecutive replacements on the same beat only emit the final value", async () => {
+			const calls: Array<{ time: number; value: number }> = [];
+			await Offline(({ transport }) => {
+				const seq = new Sequence({
+					events: [0, 1, 2, 3],
+					subdivision: "4n",
+					callback(_time, value): void {
+						if (value !== null) {
+							calls.push({
+								time: transport.now(),
+								value,
+							});
+						}
+					},
+				}).start(0);
+				transport.start(0);
+				// Two consecutive replacements on beat 0
+				return atTime(1.5, () => {
+					seq.events[0] = 10;
+					seq.events[0] = 20;
+				});
+			}, 5);
+			// After replacements, only value 20 should appear (not 0 or 10)
+			const afterTransition = calls.filter((c) => c.time > 2.5);
+			const unexpectedValues = afterTransition.filter(
+				(c) => c.value === 0 || c.value === 10
+			);
+			expect(unexpectedValues.length).to.equal(0);
+			// Value 20 should appear
+			const expectedValues = afterTransition.filter(
+				(c) => c.value === 20
+			);
+			expect(expectedValues.length).to.be.gt(0);
+		});
+	});
 });

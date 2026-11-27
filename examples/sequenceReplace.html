@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>Sequence Replace During Playback</title>
+		<style>
+			body { font-family: system-ui, sans-serif; padding: 2rem; background: #1a1a2e; color: #eee; }
+			button { padding: 0.6rem 1.2rem; margin: 0.3rem; border: none; border-radius: 6px; cursor: pointer; font-size: 0.95rem; }
+			.controls { margin: 1rem 0; }
+			#log { background: #16213e; padding: 1rem; border-radius: 8px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 0.85rem; }
+			.log-line { margin: 0.15rem 0; }
+			.old { color: #e94560; }
+			.new { color: #0f3460; }
+			.highlight { color: #f5c518; }
+		</style>
+	</head>
+	<body>
+		<h2>4-Beat Sequence — Replace During Playback</h2>
+		<p>Original: beats <strong>0, 1, 2, 3</strong>. Click a button to replace beats.</p>
+		<div class="controls">
+			<button id="startBtn">▶ Start</button>
+			<button id="stopBtn">⏹ Stop</button>
+			<button id="replaceBtn1">Replace beat 0 → 10</button>
+			<button id="replaceBtn2">Replace beat 1 → 11</button>
+			<button id="replaceBothBtn">Consecutive: beat 0 → 10, then → 20</button>
+		</div>
+		<div id="log"></div>
+
+		<script src="../build/Tone.js"></script>
+		<script>
+			const logEl = document.getElementById("log");
+			function log(msg, cls = "") {
+				const div = document.createElement("div");
+				div.className = "log-line " + cls;
+				div.textContent = msg;
+				logEl.appendChild(div);
+				logEl.scrollTop = logEl.scrollHeight;
+			}
+
+			const synth = new Tone.Synth({ oscillator: { type: "triangle" } }).toDestination();
+			const transport = Tone.getTransport();
+			transport.bpm.value = 100;
+
+			const seq = new Tone.Sequence(
+				(time, value) => {
+					if (value !== null) {
+						synth.triggerAttackRelease(value, "16n", time);
+						const beatNum = transport.position.split(":")[1];
+						log(`beat ${beatNum}: note=${value}`, "");
+					} else {
+						const beatNum = transport.position.split(":")[1];
+						log(`beat ${beatNum}: (rest)`, "old");
+					}
+				},
+				[0, 1, 2, 3],
+				"4n"
+			).start(0);
+
+			document.getElementById("startBtn").onclick = () => {
+				transport.start();
+				log("▶ Transport started", "highlight");
+			};
+			document.getElementById("stopBtn").onclick = () => {
+				transport.stop();
+				log("⏹ Transport stopped", "highlight");
+			};
+			document.getElementById("replaceBtn1").onclick = () => {
+				seq.events[0] = 10;
+				log("🔄 Replaced beat 0 → 10 (takes effect next loop)", "new");
+			};
+			document.getElementById("replaceBtn2").onclick = () => {
+				seq.events[1] = 11;
+				log("🔄 Replaced beat 1 → 11 (takes effect next loop)", "new");
+			};
+			document.getElementById("replaceBothBtn").onclick = () => {
+				seq.events[0] = 10;
+				seq.events[0] = 20;
+				log("🔄 Consecutive replace: beat 0 → 10 → 20 (only 20 takes effect)", "new");
+			};
+		</script>
+	</body>
+</html>

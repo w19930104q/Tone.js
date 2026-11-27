@@ -150,9 +150,17 @@ export class Part<ValueType = any> extends ToneEvent<ValueType> {
 				event.startOffset >= this._loopStart &&
 				event.startOffset < this._loopEnd
 			) {
-				if (event.startOffset < offset) {
-					// start it on the next loop
-					ticks += this._getLoopDuration();
+				const loopDur = this._getLoopDuration();
+				const partStartTime = ticks + offset;
+				const currentTicks = this.context.transport.ticks;
+				if (loopDur > 0 && currentTicks > partStartTime) {
+					const effectiveOffset =
+						((currentTicks - ticks) % loopDur + loopDur) % loopDur;
+					if (event.startOffset < effectiveOffset) {
+						ticks += loopDur;
+					}
+				} else if (event.startOffset < offset) {
+					ticks += loopDur;
 				}
 				event.start(new TicksClass(this.context, ticks));
 			} else if (
