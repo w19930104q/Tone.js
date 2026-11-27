@@ -983,4 +983,225 @@ describe("Part", () => {
 			expect(calls.length).to.equal(4);
 		});
 	});
+
+	context("replace", () => {
+		it("replaces all events with new data while running", async () => {
+			const calls: Array<[number, string]> = [];
+			await Offline(({ transport }) => {
+				const part = new Part(
+					(time, value) => {
+						calls.push([time, value]);
+					},
+					[
+						[0, "A"],
+						[0.1, "B"],
+						[0.2, "C"],
+					]
+				).start(0);
+				transport.start(0);
+				return atTime(0.05, () => {
+					part.replace([
+						[0.15, "X"],
+						[0.25, "Y"],
+					]);
+				});
+			}, 0.4);
+			// Old events before replace: A at ~0, B at ~0.1
+			// New events after replace at 0.05: X at 0.15, Y at 0.25
+			// C at 0.2 should NOT fire (cancelled)
+			const values = calls.map((c) => c[1]);
+			expect(values).to.include("A");
+			expect(values).to.include("X");
+			expect(values).to.include("Y");
+			expect(values).to.not.include("C");
+			// B at 0.1 fires before replace at 0.05
+			expect(values).to.include("B");
+		});
+
+		it("keeps old events running when validation fails", async () => {
+			const calls: string[] = [];
+			await Offline(({ transport }) => {
+				const part = new Part(
+					(time, value) => {
+						calls.push(value);
+					},
+					[
+						[0, "A"],
+						[0.1, "B"],
+						[0.2, "C"],
+					]
+				).start(0);
+				transport.start(0);
+				return atTime(0.05, () => {
+					expect(() => {
+						part.replace([
+							[0, "X"],
+							[-1, "BAD"],
+						]);
+					}).to.throw(Error);
+				});
+			}, 0.4);
+			// All three original events should still fire
+			expect(calls).to.include("A");
+			expect(calls).to.include("B");
+			expect(calls).to.include("C");
+			expect(calls).to.not.include("X");
+			expect(calls.length).to.equal(3);
+		});
+
+		it("rejects NaN time values", () => {
+			Offline(() => {
+				const part = new Part(noOp, [[0, "safe"]]);
+				expect(() => {
+					part.replace([[NaN, "bad"]]);
+				}).to.throw(Error);
+				expect(part.length).to.equal(1);
+				part.dispose();
+			});
+		});
+
+		it("rejects Infinity time values", () => {
+			Offline(() => {
+				const part = new Part(noOp, [[0, "safe"]]);
+				expect(() => {
+					part.replace([[Infinity, "bad"]]);
+				}).to.throw(Error);
+				expect(part.length).to.equal(1);
+				part.dispose();
+			});
+		});
+
+		it("rejects unparseable time strings", () => {
+			Offline(() => {
+				const part = new Part(noOp, [[0, "safe"]]);
+				expect(() => {
+					part.replace([["not-a-time", "bad"]]);
+				}).to.throw(Error);
+				expect(part.length).to.equal(1);
+				part.dispose();
+			});
+		});
+
+		it("preserves scheduled events that already fired before replace", async () => {
+			const calls: string[] = [];
+			await Offline(({ transport }) => {
+				const part = new Part(
+					(time, value) => {
+						calls.push(value);
+					},
+					[
+						[0, "old-1"],
+						[0.3, "old-2"],
+					]
+				).start(0);
+				transport.start(0);
+				return atTime(0.1, () => {
+					part.replace([
+						[0.2, "new-1"],
+						[0.4, "new-2"],
+					]);
+				});
+			}, 0.6);
+			// old-1 fired at 0 before replace
+			expect(calls).to.include("old-1");
+			// old-2 (at 0.3) should NOT fire, replaced at 0.1
+			expect(calls).to.not.include("old-2");
+			// new events fire
+			expect(calls).to.include("new-1");
+			expect(calls).to.include("new-2");
+		});
+
+		it("sample: 8-bar part with invalid new data", async () => {
+			// Build an 8-bar (4/4) part: 2 events per bar = 16 events
+			const eightBarEvents: Array<[number, string]> = [];
+			for (let bar = 0; bar < 8; bar++) {
+				eightBarEvents.push([bar, `bar${bar}-downbeat`]);
+				eightBarEvents.push([bar + 0.5, `bar${bar}-upbeat`]);
+			}
+
+			const calls: string[] = [];
+			await Offline(({ transport }) => {
+				const part = new Part(
+					(time, value) => {
+						calls.push(value);
+					},
+					eightBarEvents
+				).start(0);
+				transport.start(0);
+
+				return atTime(0.3, () => {
+					// New data has an invalid beat position (negative)
+					const badData: Array<[number, string]> = [
+						[0, "new-down"],
+						[-2, "illegal-negative"],
+						[1, "new-up"],
+					];
+					expect(() => {
+						part.replace(badData);
+					}).to.throw(Error, /invalid time/);
+				});
+			}, 2);
+
+			// The original 8-bar events should all have been scheduled
+			// (we check that bar 0 and bar 1 events fired before end)
+			expect(calls).to.include("bar0-downbeat");
+			expect(calls).to.include("bar0-upbeat");
+			expect(calls).to.include("bar1-downbeat");
+			expect(calls).to.include("bar1-upbeat");
+			// No new events leaked through
+			expect(calls).to.not.include("new-down");
+			expect(calls).to.not.include("new-up");
+		});
+
+		it("can replace events on a stopped part (state restoration)", async () => {
+			await Offline(() => {
+				const part = new Part(noOp, [
+					[0, "A"],
+					[0.1, "B"],
+				]);
+				expect(part.length).to.equal(2);
+				const result = part.replace([
+					[0.2, "X"],
+					[0.4, "Y"],
+					[0.6, "Z"],
+				]);
+				expect(result).to.equal(true);
+				expect(part.length).to.equal(3);
+				expect((part.at(0.2) as ToneEvent).value).to.equal("X");
+				expect((part.at(0.4) as ToneEvent).value).to.equal("Y");
+				expect((part.at(0.6) as ToneEvent).value).to.equal("Z");
+				part.dispose();
+			});
+		});
+
+		it("no duplicate events fire after replacement", async () => {
+			const timestamps: number[] = [];
+			await Offline(({ transport }) => {
+				const part = new Part(
+					(time) => {
+						timestamps.push(time);
+					},
+					[
+						[0, 0],
+						[0.15, 1],
+						[0.3, 2],
+					]
+				).start(0);
+				transport.start(0);
+				return atTime(0.05, () => {
+					part.replace([
+						[0.1, "a"],
+						[0.2, "b"],
+						[0.35, "c"],
+					]);
+				});
+			}, 0.5);
+			// Check no duplicates by ensuring all timestamps are unique
+			const unique = new Set(timestamps.map((t) => t.toFixed(4)));
+			expect(unique.size).to.equal(timestamps.length);
+			// We expect: old event at 0, then new events at 0.1, 0.2, 0.35
+			expect(timestamps.length).to.be.at.least(4);
+		});
+	});
+
 });

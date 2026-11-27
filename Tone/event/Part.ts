@@ -296,6 +296,125 @@ export class Part<ValueType = any> extends ToneEvent<ValueType> {
 			}
 		});
 	}
+	/**
+	 * Validate that a time value can be converted to a valid, non-negative tick.
+	 * Returns the ticks on success, or -1 on failure.
+	 */
+	private _validateEventTime(time: Time): Ticks {
+		try {
+			const ticks = this.toTicks(time);
+			if (isNaN(ticks) || !isFinite(ticks) || ticks < 0) {
+				return -1;
+			}
+			return ticks;
+		} catch (_e) {
+			return -1;
+		}
+	}
+
+	/**
+	 * Replace all events in this Part with a new set of events, without
+	 * stopping the Transport clock. The new events are fully validated
+	 * before any old events are removed — if validation fails the
+	 * existing Part continues playing with no interruption.
+	 *
+	 * After a successful replacement, previously scheduled callbacks
+	 * from the old events are cancelled so that no duplicate or
+	 * overlapping events fire.
+	 *
+	 * @param events  The new array of events.
+	 * @returns `true` if the replacement succeeded.
+	 * @throws Error if any event has an invalid (negative, NaN,
+	 *   infinite, or unparseable) time.
+	 */
+	replace(events: ValueType[]): boolean {
+		// ---- 1. Validate every event before touching anything ----
+		const validated: Array<{
+			time: Time;
+			value: any;
+			ticks: Ticks;
+		}> = [];
+
+		for (const event of events) {
+			let time: Time;
+			let value: any;
+
+			if (isArray(event)) {
+				time = event[0];
+				value = event[1];
+			} else if (isObject(event) && Reflect.has(event as object, "time")) {
+				time = (event as any).time;
+				value = event;
+			} else {
+				throw new Error(
+					`Part.replace: each event must be a [time, value] tuple ` +
+						`or an object with a "time" property`
+				);
+			}
+
+			const ticks = this._validateEventTime(time);
+			if (ticks < 0) {
+				throw new Error(
+					`Part.replace: invalid time "${time}" — must be a ` +
+						`non-negative, finite, parseable TransportTime`
+				);
+			}
+
+			validated.push({ time, value, ticks });
+		}
+
+		// ---- 2. Save current play-state so we can restore it ----
+		const stateSnapshots: Array<{
+			state: string;
+			time: number;
+			offset: number;
+		}> = [];
+		this._state.forEach((entry) => {
+			stateSnapshots.push({
+				offset: entry.offset,
+				state: entry.state,
+				time: entry.time,
+			});
+		});
+
+		// ---- 3. Dispose old events (cancels transport schedules) ----
+		this._forEach((oldEvent) => {
+			oldEvent.cancel(0);
+			oldEvent.dispose();
+		});
+		this._events.clear();
+
+		// ---- 4. Add every validated new event ----
+		for (const item of validated) {
+			const newEvent = new ToneEvent({
+				callback: this._tick.bind(this),
+				context: this.context,
+				value: item.value,
+			});
+			newEvent.startOffset = item.ticks;
+			newEvent.set({
+				humanize: this.humanize,
+				loop: this.loop,
+				loopEnd: this.loopEnd,
+				loopStart: this.loopStart,
+				playbackRate: this.playbackRate,
+				probability: this.probability,
+			});
+			this._events.add(newEvent);
+		}
+
+		// ---- 5. Restart events for any active "started" segment ----
+		for (const snap of stateSnapshots) {
+			if (snap.state === "started") {
+				this._forEach((event) => {
+					this._startNote(event, snap.time, snap.offset);
+				});
+			}
+		}
+
+		return true;
+	}
+
 
 	/**
 	 * Remove an event from the part. If the event at that time is a Part,
