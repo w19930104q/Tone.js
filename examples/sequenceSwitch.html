@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>Sequence Switch</title>
+		<script src="./tone-ui.js"></script>
+	</head>
+	<body>
+		<tone-example>
+			<div slot="explanation">
+				<a href="https://tonejs.github.io/docs/latest/classes/SequenceSwitch.html"
+					>Tone.SequenceSwitch</a
+				>
+				hot-swaps the instrument a Sequence plays into during playback.
+				The old instrument only finishes notes that have already
+				started their release; all subsequent events go to the new
+				instrument. This demo plays 16 eighth notes: the first 8
+				through a triangle-wave <b>Synth</b>, the last 8 through a
+				square-wave <b>Synth</b>. The switch happens on beat 2 so the
+				triangle's tail is audible while the square takes over.
+			</div>
+
+			<tone-play-toggle></tone-play-toggle>
+		</tone-example>
+
+		<script data-tone-code>
+			const oldSynth = new Tone.Synth({
+				oscillator: { type: "triangle" },
+				envelope: { attack: 0.01, decay: 0.1, sustain: 0.3, release: 0.8 },
+				volume: -8,
+			}).toDestination();
+
+			const newSynth = new Tone.Synth({
+				oscillator: { type: "square" },
+				envelope: { attack: 0.01, decay: 0.05, sustain: 0.2, release: 0.6 },
+				volume: -10,
+			}).toDestination();
+
+			const switcher = new Tone.SequenceSwitch(oldSynth);
+
+			const notes = [
+				"C4", "D4", "E4", "F4", "G4", "A4", "B4", "C5",
+				"C4", "D4", "E4", "F4", "G4", "A4", "B4", "C5",
+			];
+
+			const seq = new Tone.Sequence((time, note) => {
+				switcher.triggerAttackRelease(note, "8n", time);
+			}, notes).start(0);
+
+			// switch on the second measure (right after beat 8)
+			Tone.Transport.schedule(() => {
+				switcher.switchTo(newSynth);
+			}, "2:0:0");
+		</script>
+
+		<script>
+			bind("tone-play-toggle", Tone.getTransport());
+		</script>
+	</body>
+</html>
